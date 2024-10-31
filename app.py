@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import yt_dlp
 import whisper
 import os
+import sqlite3
 
 app = Flask(__name__)
 
@@ -21,6 +22,29 @@ whisper_model = whisper.load_model("base", device="cpu")
 
 # 감정 분석 모델 초기화
 sentiment_analyzer = pipeline("sentiment-analysis")
+
+
+def init_db():
+    conn = sqlite3.connect("shorts.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shorts (
+            shorts_code INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            product_code INTEGER NOT NULL,
+            youtube_url TEXT NOT NULL,
+            youtube_thumbnail_url TEXT NOT NULL,
+            sentiment_label TEXT NOT NULL,
+            sentiment_score REAL NOT NULL
+        )
+    """
+    )
+    conn.commit()
+    conn.close()
+
+
+# 앱 시작 시 데이터베이스 초기화
+init_db()
 
 
 def search_youtube_videos(query, max_results=10, page_token=None):
@@ -52,7 +76,7 @@ def download_audio(video_id, audio_file="temp_audio.mp3"):
             {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
-                "preferredquality": "192",  
+                "preferredquality": "192",
             }
         ],
         "keepvideo": False,
@@ -96,38 +120,60 @@ def analyze_sentiment(text):
     return most_common_sentiment, average_score
 
 
-def process_video(video):
+def save_shorts_to_db(
+    product_code, youtube_url, youtube_thumbnail_url, sentiment_label, sentiment_score
+):
+    """SQLite 데이터베이스에 데이터 저장"""
+    conn = sqlite3.connect("shorts.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO shorts (product_code, youtube_url, youtube_thumbnail_url, sentiment_label, sentiment_score)
+        VALUES (?, ?, ?, ?, ?)
+    """,
+        (
+            product_code,
+            youtube_url,
+            youtube_thumbnail_url,
+            sentiment_label,
+            sentiment_score,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def process_video(video, product_code):
     """비디오 처리: 오디오 다운로드, 텍스트 변환, 감정 분석"""
     video_id = video["id"]["videoId"]
     title = video["snippet"]["title"]
-    thumbnail_url = video["snippet"]["thumbnails"]["high"]["url"]
-    print(f"\n검색된 Shorts: {title}")
+    youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+    youtube_thumbnail_url = video["snippet"]["thumbnails"]["high"]["url"]
 
-    # 오디오 파일 다운로드 및 텍스트 변환
     audio_file = f"temp_audio_{video_id}.mp3"
 
     try:
-        # 오디오 다운로드 및 텍스트 변환
         download_audio(video_id, audio_file)
         text = transcribe_audio(audio_file)
 
-        # 감정 분석 수행
-        label, score = analyze_sentiment(text)
-        print(f"Sentiment: {label} (Confidence: {score:.2f})")
+        sentiment_label, sentiment_score = analyze_sentiment(text)
+        print(f"Sentiment: {sentiment_label} (Confidence: {sentiment_score:.2f})")
 
-        return video_id, label, score, thumbnail_url
+        save_shorts_to_db(
+            product_code,
+            youtube_url,
+            youtube_thumbnail_url,
+            sentiment_label,
+            sentiment_score,
+        )
+        return youtube_url, sentiment_label, sentiment_score, youtube_thumbnail_url
 
     except Exception as e:
         print(f"Error processing video {video_id}: {e}")
 
     finally:
-        # 파일이 남아있는지 확인하고 안전하게 삭제
-        try:
-            if os.path.exists(audio_file):
-                os.remove(audio_file)
-                print(f"Deleted {audio_file}")
-        except Exception as e:
-            print(f"Failed to delete {audio_file}: {e}")
+        if os.path.exists(audio_file):
+            os.remove(audio_file)
 
 
 @app.route("/search", methods=["POST"])
@@ -135,6 +181,7 @@ def search():
     """POST 요청으로 숏츠 검색 및 긍정 영상 반환"""
     data = request.json
     query = data.get("query", "")
+    product_code = data.get("product_code", 0)
     max_results = data.get("max_results", 10)
     max_positive = data.get("max_positive", 5)
 
@@ -146,14 +193,20 @@ def search():
             query, max_results, next_page_token
         )
         with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(process_video, video) for video in videos]
+            futures = [
+                executor.submit(process_video, video, product_code) for video in videos
+            ]
             for future in as_completed(futures):
                 try:
-                    video_id, label, score, thumbnail_url = future.result()
-                    if label == "POSITIVE" and score >= 0.5:
-                        link = f"https://www.youtube.com/watch?v={video_id}"
+                    (
+                        youtube_url,
+                        sentiment_label,
+                        sentiment_score,
+                        youtube_thumbnail_url,
+                    ) = future.result()
+                    if sentiment_label == "POSITIVE" and sentiment_score >= 0.5:
                         positive_links.append(
-                            {"link": link, "thumbnail": thumbnail_url}
+                            {"link": youtube_url, "thumbnail": youtube_thumbnail_url}
                         )
                         if len(positive_links) >= max_positive:
                             break
