@@ -7,6 +7,10 @@ import yt_dlp
 import whisper
 import os
 import sqlite3
+from dotenv import load_dotenv
+import uuid
+
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -35,7 +39,9 @@ def init_db():
             youtube_url TEXT NOT NULL,
             youtube_thumbnail_url TEXT NOT NULL,
             sentiment_label TEXT NOT NULL,
-            sentiment_score REAL NOT NULL
+            sentiment_score REAL NOT NULL,
+            shorts_id TEXT NOT NULL,
+            thumbnail_id TEXT NOT NULL
         )
     """
     )
@@ -47,14 +53,24 @@ def init_db():
 init_db()
 
 
-def search_youtube_videos(query, max_results=10, page_token=None):
+def get_product_data():
+    """백엔드 DB에서 product_id와 상품명 가져오기 (임시 예시)"""
+    # MongoDB Atlas 또는 다른 데이터베이스에서 데이터 가져오기
+    # 여기서는 예제 데이터를 사용합니다.
+    return [
+        {"product_id": 1, "product_name": "나이키 에어 포스 1"},
+        {"product_id": 2, "product_name": "여성용 스커트"},
+    ]
+
+
+def search_youtube_videos(product_name, max_results=10, page_token=None):
     """YouTube API를 사용해 키워드로 숏츠 검색"""
     youtube = build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=API_KEY)
 
     response = (
         youtube.search()
         .list(
-            q=query,
+            q=product_name,
             part="id,snippet",
             maxResults=max_results,
             type="video",
@@ -88,8 +104,12 @@ def download_audio(video_id, audio_file="temp_audio.mp3"):
 
 def transcribe_audio(audio_file):
     """Whisper로 오디오 텍스트 변환"""
-    result = whisper_model.transcribe(audio_file)
-    return result["text"]
+    try:
+        result = whisper_model.transcribe(audio_file)
+        return result["text"]
+    except Exception as e:
+        print(f"Transcription error for {audio_file}: {e}")
+        return None
 
 
 def split_text_by_tokens(text, tokenizer, max_length=512):
@@ -121,15 +141,21 @@ def analyze_sentiment(text):
 
 
 def save_shorts_to_db(
-    product_code, youtube_url, youtube_thumbnail_url, sentiment_label, sentiment_score
+    product_code,
+    youtube_url,
+    youtube_thumbnail_url,
+    sentiment_label,
+    sentiment_score,
+    shorts_id,
+    thumbnail_id,
 ):
     """SQLite 데이터베이스에 데이터 저장"""
     conn = sqlite3.connect("shorts.db")
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT INTO shorts (product_code, youtube_url, youtube_thumbnail_url, sentiment_label, sentiment_score)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO shorts (product_code, shorts_id, youtube_url, thumbnail_id, youtube_thumbnail_url, sentiment_label, sentiment_score)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """,
         (
             product_code,
@@ -137,6 +163,8 @@ def save_shorts_to_db(
             youtube_thumbnail_url,
             sentiment_label,
             sentiment_score,
+            shorts_id,
+            thumbnail_id,
         ),
     )
     conn.commit()
@@ -146,15 +174,20 @@ def save_shorts_to_db(
 def process_video(video, product_code):
     """비디오 처리: 오디오 다운로드, 텍스트 변환, 감정 분석"""
     video_id = video["id"]["videoId"]
-    title = video["snippet"]["title"]
     youtube_url = f"https://www.youtube.com/watch?v={video_id}"
     youtube_thumbnail_url = video["snippet"]["thumbnails"]["high"]["url"]
+
+    # shorts_id 및 thumbnail_id 생성
+    shorts_id = str(uuid.uuid4())
+    thumbnail_id = str(uuid.uuid4())
 
     audio_file = f"temp_audio_{video_id}.mp3"
 
     try:
         download_audio(video_id, audio_file)
         text = transcribe_audio(audio_file)
+        if text is None:
+            return None  # 텍스트가 없으면 건너뛰기
 
         sentiment_label, sentiment_score = analyze_sentiment(text)
         print(f"Sentiment: {sentiment_label} (Confidence: {sentiment_score:.2f})")
@@ -165,58 +198,98 @@ def process_video(video, product_code):
             youtube_thumbnail_url,
             sentiment_label,
             sentiment_score,
+            shorts_id,
+            thumbnail_id,
         )
-        return youtube_url, sentiment_label, sentiment_score, youtube_thumbnail_url
+        return (
+            youtube_url,
+            youtube_thumbnail_url,
+            sentiment_label,
+            sentiment_score,
+            shorts_id,
+            thumbnail_id,
+        )
 
     except Exception as e:
         print(f"Error processing video {video_id}: {e}")
+        return None  # 오류 발생 시 None을 반환하여 건너뜁니다.
 
     finally:
         if os.path.exists(audio_file):
             os.remove(audio_file)
 
 
-@app.route("/search", methods=["POST"])
+@app.route("/api/shorts/search/", methods=["POST"])
 def search():
-    """POST 요청으로 숏츠 검색 및 긍정 영상 반환"""
+    """특정 상품의 숏츠 검색 및 긍정 영상 반환"""
+    # 요청에서 product_id와 product_name 가져오기
     data = request.json
-    query = data.get("query", "")
-    product_code = data.get("product_code", 0)
-    max_results = data.get("max_results", 10)
-    max_positive = data.get("max_positive", 5)
+    product_id = data.get("product_id")
+    product_name = data.get("product_name")
 
-    positive_links = []
-    next_page_token = None
+    if not product_id or not product_name:
+        return jsonify({"error": "product_id와 product_name이 필요합니다."}), 400
 
-    while len(positive_links) < max_positive:
-        videos, next_page_token = search_youtube_videos(
-            query, max_results, next_page_token
-        )
+    # YouTube API 호출
+    videos, next_page_token = search_youtube_videos(product_name)
+
+    # 결과 저장 리스트 초기화
+    results = []
+    processed_video_ids = set()  # 중복 방지용
+
+    while len(results) < 3:  # 결과가 3개에 도달할 때까지 반복
         with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [
-                executor.submit(process_video, video, product_code) for video in videos
-            ]
-            for future in as_completed(futures):
-                try:
-                    (
-                        youtube_url,
-                        sentiment_label,
-                        sentiment_score,
-                        youtube_thumbnail_url,
-                    ) = future.result()
-                    if sentiment_label == "POSITIVE" and sentiment_score >= 0.5:
-                        positive_links.append(
-                            {"link": youtube_url, "thumbnail": youtube_thumbnail_url}
-                        )
-                        if len(positive_links) >= max_positive:
-                            break
-                except Exception as e:
-                    print(f"Error processing video: {e}")
+            # 각 future와 video를 매핑
+            futures = {
+                executor.submit(process_video, video, product_id): video
+                for video in videos
+                if video["id"]["videoId"] not in processed_video_ids
+            }
 
-        if not next_page_token:
+            for future in as_completed(futures):
+                video = futures[future]  # 현재 future에 해당하는 video 가져오기
+                try:
+                    result = future.result()
+                    if result:
+                        (
+                            youtube_url,
+                            youtube_thumbnail_url,
+                            sentiment_label,
+                            sentiment_score,
+                            shorts_id,
+                            thumbnail_id,
+                        ) = result
+
+                        # 감정 분석 결과 확인
+                        if sentiment_label == "POSITIVE" and sentiment_score >= 0.5:
+                            results.append(
+                                {
+                                    "shorts_id": shorts_id,
+                                    "thumbnail_id": thumbnail_id,
+                                    "link": youtube_url,
+                                    "thumbnail": youtube_thumbnail_url,
+                                    "sentiment_label": sentiment_label,
+                                    "sentiment_score": sentiment_score,
+                                }
+                            )
+                        # 처리된 영상 ID 추가
+                        processed_video_ids.add(video["id"]["videoId"])
+                except Exception as e:
+                    print(f"Error processing video {video}: {e}")
+
+                if len(results) >= 3:
+                    break
+
+        # 다음 페이지가 있으면 추가 검색
+        if len(results) < 3 and next_page_token:
+            videos, next_page_token = search_youtube_videos(
+                product_name, page_token=next_page_token
+            )
+        else:
             break
 
-    return jsonify({"positive_videos": positive_links})
+    # 응답 반환
+    return jsonify({"product_id": product_id, "positive_videos": results})
 
 
 if __name__ == "__main__":
