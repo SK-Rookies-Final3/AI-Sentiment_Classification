@@ -31,4 +31,4 @@ jobs:
       - name: Push to AWS CodeCommit
         run: |
           set -x
-          git push codecommit main
+          git push --force codecommit main
