@@ -29,8 +29,6 @@ jobs:
       - name: Add codecommit remote
         run: git remote add codecommit https://git-codecommit.${{ secrets.AWS_REGION }}.amazonaws.com/v1/repos/AI-Sentiment-Classification
 
-
-
       - name: Push to AWS CodeCommit
         run: |
           set -x
