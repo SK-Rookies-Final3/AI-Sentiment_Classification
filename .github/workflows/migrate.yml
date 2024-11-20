@@ -25,7 +25,6 @@ jobs:
         run: |
           git config --global credential.helper '!aws codecommit credential-helper $@'
           git config --global credential.UseHttpPath true
-
       - name: Add codecommit remote
         run: git remote add codecommit https://git-codecommit.${{ secrets.AWS_REGION }}.amazonaws.com/v1/repos/AI-Sentiment-Classification
 
