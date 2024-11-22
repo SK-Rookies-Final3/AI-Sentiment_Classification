@@ -4,9 +4,20 @@ FROM python:3.11.3-slim
 # 작업 디렉토리 설정
 WORKDIR /app
 
-# 시스템 패키지 업데이트 및 ffmpeg 설치
+# MariaDB Connector/C 최신 버전 설치
+RUN apt-get update && \
+    apt-get install -y wget gnupg curl && \
+    wget https://downloads.mariadb.com/MariaDB/mariadb_repo_setup && \
+    chmod +x mariadb_repo_setup && \
+    ./mariadb_repo_setup --mariadb-server-version=10.6 && \
+    apt-get install -y mariadb-client libmariadb-dev-compat libmariadb-dev && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# 시스템 필수 패키지 설치
 RUN apt-get update && \
     apt-get install -y ffmpeg git gcc build-essential && \
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # pip 최신 버전으로 업데이트
