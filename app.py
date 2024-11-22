@@ -63,6 +63,7 @@ def get_product_data():
         if conn:
             conn.close()
 
+
 def initialize_database():
     """MariaDB에서 shorts 테이블 자동 생성"""
     try:
@@ -95,8 +96,10 @@ def initialize_database():
             conn.close()
             print("Database connection closed.")
 
+
 # 앱 시작 시 데이터베이스 초기화
 initialize_database()
+
 
 def search_youtube_videos(product_name, max_results=10, page_token=None):
     """YouTube API를 사용해 키워드로 숏츠 검색"""
@@ -218,7 +221,6 @@ def update_product_with_shorts(product_code, shorts_data):
             print("Connection closed.")
 
 
-
 def process_video(video, product_code):
     """비디오 처리: 오디오 다운로드, 텍스트 변환, 감정 분석"""
     video_id = video["id"]["videoId"]
@@ -258,7 +260,7 @@ def process_video(video, product_code):
             os.remove(audio_file)
 
 
-@app.route("/api/shorts/search/", methods=["POST"])
+@app.route("/api/shorts/search", methods=["POST"])
 def search():
     """특정 상품의 숏츠 검색 및 긍정 영상 반환"""
     # 요청에서 product_code와 product_name 가져오기
@@ -329,7 +331,7 @@ def search():
     # MariaDB 업데이트
     print(f"Final results for update: {results}")
     update_product_with_shorts(product_code, results)
-    
+
     response_data = {
         "product_code": product_code,
         "shorts": results,
