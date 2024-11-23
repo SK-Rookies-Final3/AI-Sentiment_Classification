@@ -6,9 +6,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import yt_dlp
 import whisper
 import os
-import sqlite3
 from dotenv import load_dotenv
 import uuid
+import pymysql
 
 load_dotenv()
 
@@ -21,6 +21,15 @@ API_KEY = os.getenv("YOUTUBE_API_KEY")  # 환경 변수에서 API 키 가져오�
 YOUTUBE_API_SERVICE_NAME = "youtube"
 YOUTUBE_API_VERSION = "v3"
 
+# RDS 데이터베이스 정보
+RDS_CONFIG = {
+    "host": os.getenv("RDS_HOST"),
+    "user": os.getenv("RDS_USER"),
+    "password": os.getenv("RDS_PASSWORD"),
+    "database": os.getenv("RDS_DATABASE"),
+    "port": int(os.getenv("RDS_PORT", 3306)),
+}
+
 # Whisper 모델 로드
 whisper_model = whisper.load_model("base", device="cpu")
 
@@ -28,39 +37,68 @@ whisper_model = whisper.load_model("base", device="cpu")
 sentiment_analyzer = pipeline("sentiment-analysis")
 
 
-def init_db():
-    conn = sqlite3.connect("shorts.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        """
+def get_product_data():
+    """RDS에서 product_code와 product_name 가져오기"""
+    try:
+        # RDS 연결 설정
+        conn = pymysql.connect(**RDS_CONFIG)
+        cursor = conn.cursor()
+
+        # product 테이블에서 code와 name 가져오기
+        cursor.execute("SELECT code, name FROM product")
+        products = cursor.fetchall()
+
+        # 데이터를 딕셔너리 리스트로 변환
+        product_data = [
+            {"product_code": code, "product_name": name} for code, name in products
+        ]
+
+        return product_data
+
+    except pymysql.Error as e:
+        print(f"Error connecting to RDS: {e}")
+        return []
+
+    finally:
+        if conn:
+            conn.close()
+
+
+def initialize_database():
+    """RDS에서 shorts 테이블 자동 생성"""
+    try:
+        # RDS 연결 설정
+        conn = pymysql.connect(**RDS_CONFIG)
+        cursor = conn.cursor()
+
+        # shorts 테이블 생성
+        create_table_query = """
         CREATE TABLE IF NOT EXISTS shorts (
-            shorts_code INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-            product_code INTEGER NOT NULL,
-            youtube_url TEXT NOT NULL,
-            youtube_thumbnail_url TEXT NOT NULL,
-            sentiment_label TEXT NOT NULL,
-            sentiment_score REAL NOT NULL,
-            shorts_id TEXT NOT NULL,
-            thumbnail_id TEXT NOT NULL
-        )
-    """
-    )
-    conn.commit()
-    conn.close()
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            product_code INT NOT NULL,
+            shorts_id VARCHAR(255) NOT NULL,
+            shorts_url TEXT NOT NULL,
+            thumbnail_url TEXT NOT NULL,
+            sentiment_label VARCHAR(50) NOT NULL,
+            sentiment_score FLOAT NOT NULL,
+            UNIQUE (shorts_id)
+        );
+        """
+        cursor.execute(create_table_query)
+        conn.commit()
+        print("Table 'shorts' has been created or already exists.")
+
+    except pymysql.Error as e:
+        print(f"Error initializing database: {e}")
+
+    finally:
+        if conn:
+            conn.close()
+            print("Database connection closed.")
 
 
 # 앱 시작 시 데이터베이스 초기화
-init_db()
-
-
-def get_product_data():
-    """백엔드 DB에서 product_id와 상품명 가져오기 (임시 예시)"""
-    # MongoDB Atlas 또는 다른 데이터베이스에서 데이터 가져오기
-    # 여기서는 예제 데이터를 사용합니다.
-    return [
-        {"product_id": 1, "product_name": "나이키 에어 포스 1"},
-        {"product_id": 2, "product_name": "여성용 스커트"},
-    ]
+initialize_database()
 
 
 def search_youtube_videos(product_name, max_results=10, page_token=None):
@@ -140,35 +178,47 @@ def analyze_sentiment(text):
     return most_common_sentiment, average_score
 
 
-def save_shorts_to_db(
-    product_code,
-    youtube_url,
-    youtube_thumbnail_url,
-    sentiment_label,
-    sentiment_score,
-    shorts_id,
-    thumbnail_id,
-):
-    """SQLite 데이터베이스에 데이터 저장"""
-    conn = sqlite3.connect("shorts.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO shorts (product_code, shorts_id, youtube_url, thumbnail_id, youtube_thumbnail_url, sentiment_label, sentiment_score)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """,
-        (
-            product_code,
-            youtube_url,
-            youtube_thumbnail_url,
-            sentiment_label,
-            sentiment_score,
-            shorts_id,
-            thumbnail_id,
-        ),
-    )
-    conn.commit()
-    conn.close()
+def update_product_with_shorts(product_code, shorts_data):
+    """DB의 shorts 테이블에 숏츠 데이터 업데이트"""
+    try:
+        # RDS 연결 설정
+        conn = pymysql.connect(**RDS_CONFIG)
+        print("Connected to RDS.")
+        cursor = conn.cursor()
+
+        # shorts 데이터 삽입
+        for short in shorts_data:
+            print(f"Inserting data for shorts_id: {short['shorts_id']}")
+            cursor.execute(
+                """
+                INSERT INTO shorts (product_code, shorts_id, shorts_url, thumbnail_url, sentiment_label, sentiment_score)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    shorts_url = VALUES(shorts_url),
+                    thumbnail_url = VALUES(thumbnail_url),
+                    sentiment_label = VALUES(sentiment_label),
+                    sentiment_score = VALUES(sentiment_score)
+                """,
+                (
+                    product_code,
+                    short["shorts_id"],
+                    short["shorts_url"],
+                    short["thumbnail_url"],
+                    short["sentiment_label"],
+                    short["sentiment_score"],
+                ),
+            )
+
+        conn.commit()
+        print("Data committed successfully.")
+
+    except pymysql.Error as e:
+        print(f"Error updating RDS: {e}")
+
+    finally:
+        if conn:
+            conn.close()
+            print("Connection closed.")
 
 
 def process_video(video, product_code):
@@ -177,9 +227,8 @@ def process_video(video, product_code):
     youtube_url = f"https://www.youtube.com/watch?v={video_id}"
     youtube_thumbnail_url = video["snippet"]["thumbnails"]["high"]["url"]
 
-    # shorts_id 및 thumbnail_id 생성
+    # shorts_id생성
     shorts_id = str(uuid.uuid4())
-    thumbnail_id = str(uuid.uuid4())
 
     audio_file = f"temp_audio_{video_id}.mp3"
 
@@ -192,23 +241,15 @@ def process_video(video, product_code):
         sentiment_label, sentiment_score = analyze_sentiment(text)
         print(f"Sentiment: {sentiment_label} (Confidence: {sentiment_score:.2f})")
 
-        save_shorts_to_db(
-            product_code,
+        data = (
             youtube_url,
             youtube_thumbnail_url,
             sentiment_label,
             sentiment_score,
             shorts_id,
-            thumbnail_id,
         )
-        return (
-            youtube_url,
-            youtube_thumbnail_url,
-            sentiment_label,
-            sentiment_score,
-            shorts_id,
-            thumbnail_id,
-        )
+        print(f"Generated data for {video_id}: {data}")
+        return data
 
     except Exception as e:
         print(f"Error processing video {video_id}: {e}")
@@ -219,16 +260,16 @@ def process_video(video, product_code):
             os.remove(audio_file)
 
 
-@app.route("/api/shorts/search/", methods=["POST"])
+@app.route("/api/shorts/search", methods=["POST"])
 def search():
     """특정 상품의 숏츠 검색 및 긍정 영상 반환"""
-    # 요청에서 product_id와 product_name 가져오기
+    # 요청에서 product_code와 product_name 가져오기
     data = request.json
-    product_id = data.get("product_id")
+    product_code = data.get("product_code")
     product_name = data.get("product_name")
 
-    if not product_id or not product_name:
-        return jsonify({"error": "product_id와 product_name이 필요합니다."}), 400
+    if not product_code or not product_name:
+        return jsonify({"error": "product_code와 product_name이 필요합니다."}), 400
 
     # YouTube API 호출
     videos, next_page_token = search_youtube_videos(product_name)
@@ -241,7 +282,7 @@ def search():
         with ThreadPoolExecutor(max_workers=5) as executor:
             # 각 future와 video를 매핑
             futures = {
-                executor.submit(process_video, video, product_id): video
+                executor.submit(process_video, video, product_code): video
                 for video in videos
                 if video["id"]["videoId"] not in processed_video_ids
             }
@@ -257,7 +298,6 @@ def search():
                             sentiment_label,
                             sentiment_score,
                             shorts_id,
-                            thumbnail_id,
                         ) = result
 
                         # 감정 분석 결과 확인
@@ -265,13 +305,13 @@ def search():
                             results.append(
                                 {
                                     "shorts_id": shorts_id,
-                                    "thumbnail_id": thumbnail_id,
-                                    "link": youtube_url,
-                                    "thumbnail": youtube_thumbnail_url,
+                                    "shorts_url": youtube_url,
+                                    "thumbnail_url": youtube_thumbnail_url,
                                     "sentiment_label": sentiment_label,
                                     "sentiment_score": sentiment_score,
                                 }
                             )
+
                         # 처리된 영상 ID 추가
                         processed_video_ids.add(video["id"]["videoId"])
                 except Exception as e:
@@ -288,8 +328,16 @@ def search():
         else:
             break
 
-    # 응답 반환
-    return jsonify({"product_id": product_id, "positive_videos": results})
+    # DB 업데이트
+    print(f"Final results for update: {results}")
+    update_product_with_shorts(product_code, results)
+
+    response_data = {
+        "product_code": product_code,
+        "shorts": results,
+    }
+
+    return jsonify(response_data)
 
 
 if __name__ == "__main__":

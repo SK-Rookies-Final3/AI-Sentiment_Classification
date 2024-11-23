@@ -34,11 +34,13 @@ pyasn1-modules==0.2.8
 pycryptodomex==3.21.0
 pyparsing==3.0.9
 python-dotenv==1.0.1
+PyMySQL==1.1.1
 PyYAML==6.0
 regex==2022.7.9
 requests==2.32.3
 rsa==4.9
 safetensors==0.4.5
+SQLAlchemy==2.0.36
 sympy==1.11.1
 tiktoken==0.8.0
 tokenizers==0.13.2
