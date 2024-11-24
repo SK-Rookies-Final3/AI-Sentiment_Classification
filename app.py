@@ -9,6 +9,7 @@ import os
 from dotenv import load_dotenv
 import uuid
 import mariadb
+import time
 
 load_dotenv()
 
@@ -67,11 +68,9 @@ def get_product_data():
 def initialize_database():
     """MariaDB에서 shorts 테이블 자동 생성"""
     try:
-        # MariaDB 연결 설정
         conn = mariadb.connect(**MARIADB_CONFIG)
         cursor = conn.cursor()
 
-        # shorts 테이블 생성
         create_table_query = """
         CREATE TABLE IF NOT EXISTS shorts (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -90,9 +89,13 @@ def initialize_database():
 
     except mariadb.Error as e:
         print(f"Error initializing database: {e}")
+        retry_count -= 1
+        if retry_count == 0:
+            raise Exception("MariaDB 초기화 실패. MariaDB가 준비되지 않았습니다.")
+        time.sleep(5)  # 재시도 전 대기
 
     finally:
-        if conn:
+        if "conn" in locals() and conn:
             conn.close()
             print("Database connection closed.")
 
@@ -341,4 +344,6 @@ def search():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    app.run(
+        host=os.getenv("FLASK_RUN_HOST"), port=os.getenv("FLASK_RUN_PORT"), debug=True
+    )
