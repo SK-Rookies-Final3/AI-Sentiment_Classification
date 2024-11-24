@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  mariadb:
+    image: mariadb:10.6
+    container_name: mariadb
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MARIADB_PASSWORD}
+      MYSQL_DATABASE: ${MARIADB_DATABASE}
+      MYSQL_USER: ${MARIADB_USER}
+      MYSQL_PASSWORD: ${MARIADB_PASSWORD}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    networks:
+      - flask_network
+
+  flask:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: waseoke/ai-sentiment-classification:latest
+    container_name: ai-sentiment-classification
+    ports:
+      - "5001:5001"
+    environment:
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
+      MARIADB_USER: ${MARIADB_USER}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
+      MARIADB_HOST: ${MARIADB_HOST}
+      MARIADB_PORT: 3306
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      FLASK_HOST: ${FLASK_RUN_HOST}
+      FLASK_PORT: ${FLASK_RUN_PORT}
+    depends_on:
+      - mariadb
+    networks:
+      - flask_network
+
+networks:
+  flask_network:
+
+volumes:
+  mariadb_data:

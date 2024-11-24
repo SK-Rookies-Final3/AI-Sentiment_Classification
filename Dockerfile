@@ -20,6 +20,10 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# wait-for-it.sh 다운로드
+RUN curl -o /usr/local/bin/wait-for-it.sh https://raw.githubusercontent.com/vishnubob/wait-for-it/master/wait-for-it.sh && \
+    chmod +x /usr/local/bin/wait-for-it.sh
+
 # pip 최신 버전으로 업데이트
 RUN python -m pip install --upgrade pip
 
@@ -32,10 +36,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Flask 애플리케이션 파일을 컨테이너에 복사
 COPY . .
 
-# 환경 변수 설정
-ENV FLASK_APP=app.py
-ENV FLASK_RUN_HOST=0.0.0.0
-ENV FLASK_RUN_PORT=5001
+# wait-for-it.sh 스크립트 복사
+COPY wait-for-it.sh /wait-for-it.sh
+RUN chmod +x /wait-for-it.sh
 
-# 컨테이너 실행 시 Flask 애플리케이션 시작
-CMD ["flask", "run"]
+# Flask 애플리케이션 실행
+CMD ["/wait-for-it.sh", "mariadb:3306", "--", "flask", "run"]
