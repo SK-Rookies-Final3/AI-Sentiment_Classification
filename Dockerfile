@@ -21,10 +21,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Flask 애플리케이션 파일을 컨테이너에 복사
 COPY . .
 
-# 환경 변수 설정
-ENV FLASK_APP=app.py
-ENV FLASK_RUN_HOST=0.0.0.0
-ENV FLASK_RUN_PORT=5001
-
 # 컨테이너 실행 시 Flask 애플리케이션 시작
 CMD ["flask", "run"]

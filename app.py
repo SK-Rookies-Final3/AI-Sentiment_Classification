@@ -9,6 +9,7 @@ import os
 from dotenv import load_dotenv
 import uuid
 import pymysql
+import time
 
 load_dotenv()
 
@@ -17,17 +18,15 @@ app = Flask(__name__)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # YouTube API 설정
-API_KEY = os.getenv("YOUTUBE_API_KEY")  # 환경 변수에서 API 키 가져오기
+API_KEY = os.getenv("YOUTUBE_API_KEY")
 YOUTUBE_API_SERVICE_NAME = "youtube"
 YOUTUBE_API_VERSION = "v3"
 
 # RDS 데이터베이스 정보
 RDS_CONFIG = {
-    "host": os.getenv("RDS_HOST"),
-    "user": os.getenv("RDS_USER"),
-    "password": os.getenv("RDS_PASSWORD"),
-    "database": os.getenv("RDS_DATABASE"),
-    "port": int(os.getenv("RDS_PORT", 3306)),
+    "host": os.getenv("BRAND_DB_URL"),
+    "user": os.getenv("BRAND_DB_USER"),
+    "password": os.getenv("BRAND_DB_PASSWORD"),
 }
 
 # Whisper 모델 로드
@@ -66,35 +65,43 @@ def get_product_data():
 
 def initialize_database():
     """RDS에서 shorts 테이블 자동 생성"""
-    try:
-        # RDS 연결 설정
-        conn = pymysql.connect(**RDS_CONFIG)
-        cursor = conn.cursor()
+    retry_count = 5
+    while retry_count > 0:
+        conn = None
+        try:
+            # RDS 연결 설정
+            conn = pymysql.connect(**RDS_CONFIG)
+            cursor = conn.cursor()
 
-        # shorts 테이블 생성
-        create_table_query = """
-        CREATE TABLE IF NOT EXISTS shorts (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            product_code INT NOT NULL,
-            shorts_id VARCHAR(255) NOT NULL,
-            shorts_url TEXT NOT NULL,
-            thumbnail_url TEXT NOT NULL,
-            sentiment_label VARCHAR(50) NOT NULL,
-            sentiment_score FLOAT NOT NULL,
-            UNIQUE (shorts_id)
-        );
-        """
-        cursor.execute(create_table_query)
-        conn.commit()
-        print("Table 'shorts' has been created or already exists.")
+            # shorts 테이블 생성
+            create_table_query = """
+            CREATE TABLE IF NOT EXISTS shorts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                product_code INT NOT NULL,
+                shorts_id VARCHAR(255) NOT NULL,
+                shorts_url TEXT NOT NULL,
+                thumbnail_url TEXT NOT NULL,
+                sentiment_label VARCHAR(50) NOT NULL,
+                sentiment_score FLOAT NOT NULL,
+                UNIQUE (shorts_id)
+            );
+            """
+            cursor.execute(create_table_query)
+            conn.commit()
+            print("Table 'shorts' has been created or already exists.")
+            break
 
-    except pymysql.Error as e:
-        print(f"Error initializing database: {e}")
+        except pymysql.Error as e:
+            print(f"Error initializing database: {e}")
+            retry_count -= 1
+            if retry_count == 0:
+                raise Exception("DB 초기화 실패. DB가 준비되지 않았습니다.")
+            time.sleep(5)  # 재시도 전 대기
 
-    finally:
-        if conn:
-            conn.close()
-            print("Database connection closed.")
+        finally:
+            if conn:
+                conn.close()
+                print("Database connection closed.")
 
 
 # 앱 시작 시 데이터베이스 초기화
@@ -341,4 +348,6 @@ def search():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    app.run(
+        host=os.getenv("FLASK_RUN_HOST"), port=os.getenv("FLASK_RUN_PORT"), debug=True
+    )
