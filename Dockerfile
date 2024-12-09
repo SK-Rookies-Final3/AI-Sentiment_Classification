@@ -40,5 +40,5 @@ COPY . .
 COPY wait-for-it.sh /wait-for-it.sh
 RUN chmod +x /wait-for-it.sh
 
-# Flask 애플리케이션 실행
+# Flask 애플리케이션 실행 
 CMD ["/wait-for-it.sh", "mariadb:3306", "--", "flask", "run"]
